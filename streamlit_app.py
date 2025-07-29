@@ -6,6 +6,8 @@ from ultralytics import YOLO
 from torchvision import transforms
 import time
 import threading
+from streamlit_webrtc import webrtc_streamer, VideoTransformerBase
+import av
 
 # Clear the cache to ensure the model is reloaded with the correct device bagian 
 st.cache_resource.clear()
@@ -56,6 +58,30 @@ def classify_image_with_model(frame, model):
         label = raw_label.replace('_', ' ').title()
         return label, conf
     return 'UNKNOWN', 0
+
+class VideoTransformer(VideoTransformerBase):
+    def __init__(self):
+        self.model = load_yolo_model(MODEL_PATH)
+        self.last_pred_time = time.time()
+        self.last_label = "UNKNOWN"
+        self.last_confidence = 0.0
+
+    def recv(self, frame: av.VideoFrame) -> av.VideoFrame:
+        img = frame.to_ndarray(format="bgr24")
+        
+        current_time = time.time()
+        if current_time - self.last_pred_time >= 3:
+            self.last_pred_time = current_time
+            label, confidence = classify_image_with_model(img, self.model)
+            self.last_label = label
+            self.last_confidence = confidence
+
+        # Draw the label and confidence on the frame
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        cv2.putText(img, f"Label: {self.last_label}", (10, 30), font, 1, (0, 255, 0), 2, cv2.LINE_AA)
+        cv2.putText(img, f"Confidence: {self.last_confidence:.2f}", (10, 70), font, 1, (0, 255, 0), 2, cv2.LINE_AA)
+
+        return av.VideoFrame.from_ndarray(img, format="bgr24")
 
 # --- UI ---
 st.title("Klasifikasi Kesegaran Sayuran")
@@ -111,37 +137,10 @@ if model:
             st.success(f"Hasil Klasifikasi: **{label}**")
             st.write(f"Tingkat Keyakinan: **{confidence:.2f}**")
 
-    # --- Kamera Realtime (OpenCV) ---
+    # --- Kamera Realtime (WebRTC) ---
     elif input_method == "Kamera Realtime":
-        st.header("Kamera Realtime dengan OpenCV")
-        run = st.checkbox('Aktifkan Kamera Realtime')
-        FRAME_WINDOW = st.image([])
-        result_placeholder = st.empty()
-        camera = cv2.VideoCapture(0)
-        if not camera.isOpened():
-            st.error("Kamera tidak terdeteksi atau tidak bisa diakses. Pastikan webcam terhubung dan tidak digunakan aplikasi lain.")
-        else:
-            last_pred_time = time.time() - 3
-            while run:
-                ret, frame = camera.read()
-                if not ret or frame is None:
-                    st.warning("Gagal membaca frame dari kamera. Coba restart aplikasi atau periksa koneksi webcam.")
-                    FRAME_WINDOW.empty()
-                    time.sleep(1)
-                    continue
-                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                img = Image.fromarray(frame_rgb)
-                FRAME_WINDOW.image(img)
-                current_time = time.time()
-                if current_time - last_pred_time >= 3:
-                    last_pred_time = current_time
-                    # Klasifikasi frame setiap 3 detik
-                    label, confidence = classify_image_with_model(frame, model)
-                    with result_placeholder.container():
-                        st.write(f"Label: {label}")
-                        st.write(f"Confidence: {confidence * 100:.2f}%")
-            camera.release()
-            st.write('Kamera dihentikan')
+        st.header("Kamera Realtime dengan WebRTC")
+        webrtc_streamer(key="example", video_transformer_factory=VideoTransformer)
 
 else:
     st.error(f"Model tidak dapat dimuat dari path: `{MODEL_PATH}`. Pastikan file model ada di path yang benar.")
