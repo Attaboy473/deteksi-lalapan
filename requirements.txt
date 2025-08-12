@@ -6,3 +6,4 @@ numpy
 streamlit_webrtc
 torchvision
 av
+opencv-python
